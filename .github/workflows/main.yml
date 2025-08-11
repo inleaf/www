@@ -2,8 +2,11 @@ name: Deploy to AWS
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ]
+
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: true
 
 jobs:
   build-and-deploy:
@@ -11,20 +14,25 @@ jobs:
 
     defaults:
       run:
-        working-directory: gitaction
-        
+        working-directory: gitaction   # mvn만 이 경로에서 실행
+
     steps:
       - name: Checkout source
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Build JAR package
-        run: mvn clean package -DskipTests
+        run: mvn -B clean package -DskipTests
+
+      - name: List build outputs (debug)
+        run: |
+          ls -al
+          ls -al target || true
 
       - name: Upload JAR to EC2
         uses: appleboy/scp-action@v0.1.7
@@ -32,8 +40,10 @@ jobs:
           host: ${{ secrets.AWS_HOST }}
           username: ${{ secrets.AWS_USER }}
           key: ${{ secrets.AWS_KEY }}
-          source: "target/*.jar"
-          target: "/home/${{ secrets.AWS_USER }}/app/"  # target 디렉터리 아님, app 바로 밑에 저장
+          port: 22
+          source: "gitaction/target/*.jar"      # ⬅️ 리포 루트 기준 경로
+          target: "/home/${{ secrets.AWS_USER }}/app/"
+          overwrite: true
 
       - name: SSH and restart app safely
         uses: appleboy/ssh-action@v0.1.8
@@ -41,22 +51,38 @@ jobs:
           host: ${{ secrets.AWS_HOST }}
           username: ${{ secrets.AWS_USER }}
           key: ${{ secrets.AWS_KEY }}
+          port: 22
           script: |
             set -euxo pipefail
             APP_DIR="/home/${{ secrets.AWS_USER }}/app"
+            mkdir -p "$APP_DIR"
 
-            echo "===== Starting new app ====="
-            JAR_FILE=$(ls -t "$APP_DIR"/target/*.jar | head -n 1)
-            if [ -z "$JAR_FILE" ]; then
-              echo "ERROR: No JAR file found in $APP_DIR"
-              exit 1
+            echo "===== Stop old app if running ====="
+            # app 디렉터리에서 실행된 java -jar만 안전하게 종료
+            pids=$(pgrep -f "java.*-jar.*$APP_DIR")
+            if [ -n "${pids:-}" ]; then
+              kill $pids || true
+              sleep 3
+              pids2=$(pgrep -f "java.*-jar.*$APP_DIR") || true
+              if [ -n "${pids2:-}" ]; then
+                kill -9 $pids2 || true
+              fi
             fi
 
+            echo "===== Select newest JAR ====="
+            JAR_FILE=$(ls -t "$APP_DIR"/*.jar | head -n 1)
+            if [ -z "${JAR_FILE:-}" ]; then
+              echo "ERROR: No JAR in $APP_DIR"
+              exit 1
+            fi
+            echo "Using $JAR_FILE"
+
+            echo "===== Start app ====="
             nohup setsid java -jar "$JAR_FILE" > "$APP_DIR/app.log" 2>&1 & disown
 
             sleep 5
             echo "===== Running java processes ====="
-            ps -ef | grep java || true
+            ps -ef | grep "[j]ava" || true
 
             echo "===== Tail app.log ====="
-            tail -n 20 "$APP_DIR/app.log" || true
+            tail -n 200 "$APP_DIR/app.log" || true
