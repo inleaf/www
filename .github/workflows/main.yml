@@ -53,24 +53,21 @@ jobs:
           key: ${{ secrets.AWS_KEY }}
           port: 22
           script: |
-            set -euxo pipefail
+            set -uxo pipefail   # <- -e 제거 (혹은 아래처럼 각 명령에 || true)
             APP_DIR="/home/${{ secrets.AWS_USER }}/app"
             mkdir -p "$APP_DIR"
 
             echo "===== Stop old app if running ====="
-            # app 디렉터리에서 실행된 java -jar만 안전하게 종료
-            pids=$(pgrep -f "java.*-jar.*$APP_DIR")
-            if [ -n "${pids:-}" ]; then
+            pids=$(pgrep -f "java.*-jar.*$APP_DIR" || true)
+            if [ -n "$pids" ]; then
               kill $pids || true
               sleep 3
-              pids2=$(pgrep -f "java.*-jar.*$APP_DIR") || true
-              if [ -n "${pids2:-}" ]; then
-                kill -9 $pids2 || true
-              fi
+              pids2=$(pgrep -f "java.*-jar.*$APP_DIR" || true)
+              [ -z "$pids2" ] || kill -9 $pids2 || true
             fi
 
             echo "===== Select newest JAR ====="
-            JAR_FILE=$(ls -t "$APP_DIR"/*.jar | head -n 1)
+            JAR_FILE=$(ls -t "$APP_DIR"/*.jar 2>/dev/null | head -n 1 || true)
             if [ -z "${JAR_FILE:-}" ]; then
               echo "ERROR: No JAR in $APP_DIR"
               exit 1
@@ -86,3 +83,4 @@ jobs:
 
             echo "===== Tail app.log ====="
             tail -n 200 "$APP_DIR/app.log" || true
+
