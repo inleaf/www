@@ -41,9 +41,10 @@ jobs:
           username: ${{ secrets.AWS_USER }}
           key: ${{ secrets.AWS_KEY }}
           port: 22
-          source: "gitaction/target/*.jar"      # ⬅️ 리포 루트 기준 경로
+          source: "gitaction/target/*.jar"      # 리포 루트 기준
           target: "/home/${{ secrets.AWS_USER }}/app/"
           overwrite: true
+          strip_components: 2                    # ⬅️ gitaction/target 제거 → app/ 바로 아래에 배치
 
       - name: SSH and restart app safely
         uses: appleboy/ssh-action@v0.1.8
@@ -53,7 +54,7 @@ jobs:
           key: ${{ secrets.AWS_KEY }}
           port: 22
           script: |
-            set -uxo pipefail   # <- -e 제거 (혹은 아래처럼 각 명령에 || true)
+            set -uxo pipefail   # -e 제거
             APP_DIR="/home/${{ secrets.AWS_USER }}/app"
             mkdir -p "$APP_DIR"
 
@@ -70,6 +71,8 @@ jobs:
             JAR_FILE=$(ls -t "$APP_DIR"/*.jar 2>/dev/null | head -n 1 || true)
             if [ -z "${JAR_FILE:-}" ]; then
               echo "ERROR: No JAR in $APP_DIR"
+              echo "Listing files for debug:"
+              ls -al "$APP_DIR" || true
               exit 1
             fi
             echo "Using $JAR_FILE"
@@ -83,4 +86,3 @@ jobs:
 
             echo "===== Tail app.log ====="
             tail -n 200 "$APP_DIR/app.log" || true
-
